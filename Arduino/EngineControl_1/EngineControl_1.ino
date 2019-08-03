@@ -214,7 +214,7 @@ void process_i2c_request(void) {
  * NOTE: I don't like accessing the response in this inturrupt,
  * but I2C needs an imeediate response.
  */
-void receiveEvent()
+void receiveEvent(int numofbytes)
 {  
   while(Wire.available()){
     g_i2c_rx_buffer.push((short) Wire.read());
