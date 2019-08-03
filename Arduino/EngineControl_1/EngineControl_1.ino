@@ -24,7 +24,9 @@
  * General Config Definitions
  */
 #define ENGINE_I2C_ADDRESS 0x54
-#define LegoChannel RED
+#define LEGO_IR_CHANNEL 0 //0=ch1 1=ch2 etc.
+#define LEGO_MOTOR_OUTPUT_BLOCK BLUE
+#define LEGO_SMOKE_OUTPUT_BLOCK RED
 #define SERIAL_BAUD 9600
 #define I2C_RX_BUFFER_SIZE 50
 #define I2C_TX_BUFFER_SIZE 50
@@ -38,12 +40,13 @@
 #define LEGO_PF_PIN 10
 
 /*
- * LED State Machine Definitions
+ * State Machine Definitions
  */
 #define OFF 0x00
 #define ON  0x01
 #define DC  0x10
-
+#define SMOKE_ON  0xFF
+#define SMOKE_OFF 0x00
 
 /*
  * I2C Comms Definitions
@@ -52,6 +55,7 @@
 #define GET_ENGINE_STATUS 0x22
 #define SET_ENGINE_SPEED  0x23
 #define MARCO             0x24
+#define QUERY_COMMANDS    0x63
 
 //Response
 #define UNKNOWN_COMMAND   0x33
@@ -60,17 +64,18 @@
 /*
  * Library Instantiations
  */
-PowerFunctions pf(LEGO_PF_PIN, 0);   //Setup Lego Power functions pin
+PowerFunctions pf(LEGO_PF_PIN, LEGO_IR_CHANNEL);   //Setup Lego Power functions pin
 
 
 /*
  * Globals
  */
-short volatile currentMode = 0;
-short volatile pastMode = 0;
-boolean modeChange = false;
+short volatile g_engine_speed = 0;
+short volatile g_smoke_state = 0;
+boolean g_mode_change = false;
 CircularBuffer<short,I2C_RX_BUFFER_SIZE> g_i2c_rx_buffer;
 CircularBuffer<short,I2C_TX_BUFFER_SIZE> g_i2c_tx_buffer;
+String g_command_list = "0x22 0x23 0x24 0x63";
 
 /*
  * Setup method to handle I2C Wire setup, LED Pins and Serial output
@@ -103,58 +108,67 @@ void loop() {
  * Manages IR comms interface
  */
 void service_ir_comms() {
-  if(modeChange == true){   //process new mode of operation
+  if(g_mode_change == true){   //process new mode of operation
     Serial.print("Mode change request to: 0x");
-    Serial.println(currentMode, HEX);
-    modeChange = false;
+    Serial.println(g_engine_speed, HEX);
+    g_mode_change = false;
 
     //Handle the desired mode change
-    switch(currentMode){
+    switch(g_engine_speed){
+      case 0:
+        Serial.println("Engine off");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_BRK);
+        break;
       case 1:
         Serial.println("Slow Speed 1");
-        pf.single_pwm(LegoChannel, PWM_FWD1);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD1);
         break;
       case 2:
         Serial.println("Slow Speed 2");
-        pf.single_pwm(LegoChannel, PWM_FWD2);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD2);
         break;
       case 3:
         Serial.println("Medium Speed 1");
-        pf.single_pwm(LegoChannel, PWM_FWD3);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD3);
         break;
       case 4:
         Serial.println("Medium Speed 2");
-        pf.single_pwm(LegoChannel, PWM_FWD4);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD4);
         break;
       case 5:
         Serial.println("Fast Speed 1");
-        pf.single_pwm(LegoChannel, PWM_FWD5);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD5);
         break;
       case 6:
         Serial.println("Fast Speed 2");
-        pf.single_pwm(LegoChannel, PWM_FWD6);
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD6);
         break;
       case 7:
-        if(pastMode == 6){
-          Serial.println("Ludacrious Speed");
-          pf.single_pwm(LegoChannel, PWM_FWD7);
-        }
+        Serial.println("Fast Speed 2");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD7);
         break;
-      case 0x53:
-        if(pastMode <= 2){
-          pf.single_pwm(RED, PWM_BRK);
-          digitalWrite(GREEN_LED, LOW);
-          digitalWrite(RED_LED, HIGH);
-        }
-        break;
-      default:            
+      default:   
+        Serial.println("Unknown Motor Speed");         
         break;
     }
-    delay(100);
   }
-  if(currentMode != 0x53){
-    set_led(ON,ON,DC);
+
+  switch(g_smoke_state){
+        case SMOKE_OFF:
+          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
+          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
+          break;
+          
+        case SMOKE_ON:
+          Serial.println("SMOKEN!!!");
+          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FWD7);
+          delay(1000);
+          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
+          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
+          break;
   }
+  //Limit loop speed
+  delay(100);
 }
 
 /*
@@ -181,16 +195,15 @@ void process_i2c_request(void) {
     switch(command_temp){
       case GET_ENGINE_STATUS:
         Serial.println("Command Received, GET_ENGINE_STATUS");
-        g_i2c_tx_buffer.push(currentMode);
+        g_i2c_tx_buffer.push(g_engine_speed);
         //string_to_i2c_buffer("hello");
         break;
   
       case SET_ENGINE_SPEED:
         Serial.print("Command Received, SET_ENGINE_SPEED : ");
-        pastMode = currentMode;
-        currentMode = g_i2c_rx_buffer.shift();
-        modeChange = true;
-        Serial.println(currentMode, HEX);
+        g_engine_speed = g_i2c_rx_buffer.shift();
+        g_mode_change = true;
+        Serial.println(g_engine_speed, HEX);
         //Note, there should be some sanitization here, but maybe not for hacking comp?
         break;
 
