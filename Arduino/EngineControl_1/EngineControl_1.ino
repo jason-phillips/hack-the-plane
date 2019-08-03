@@ -30,6 +30,7 @@
 #define SERIAL_BAUD 9600
 #define I2C_RX_BUFFER_SIZE 50
 #define I2C_TX_BUFFER_SIZE 50
+#define SMOKE_LENGTH_MS   2000
 
 /*
  * Pin Definitions
@@ -45,8 +46,12 @@
 #define OFF 0x00
 #define ON  0x01
 #define DC  0x10
-#define SMOKE_ON  0xFF
-#define SMOKE_OFF 0x00
+
+#define SMOKE_OFF     0x00
+#define SMOKE_START   0x01
+#define SMOKE_RUNNING 0x02
+#define SMOKE_STOP    0x03
+
 
 /*
  * I2C Comms Definitions
@@ -56,6 +61,7 @@
 #define SET_ENGINE_SPEED  0x23
 #define MARCO             0x24
 #define QUERY_COMMANDS    0x63
+#define SMOKEN            0x42
 
 //Response
 #define UNKNOWN_COMMAND   0x33
@@ -73,9 +79,15 @@ PowerFunctions pf(LEGO_PF_PIN, LEGO_IR_CHANNEL);   //Setup Lego Power functions 
 short volatile g_engine_speed = 0;
 short volatile g_smoke_state = 0;
 boolean g_mode_change = false;
+//Timers
+unsigned long volatile g_last_time_ms = 0;
+unsigned long volatile g_current_time_ms =0;
+unsigned long volatile g_smoke_timer_ms = 0;
+
+
 CircularBuffer<short,I2C_RX_BUFFER_SIZE> g_i2c_rx_buffer;
 CircularBuffer<short,I2C_TX_BUFFER_SIZE> g_i2c_tx_buffer;
-String g_command_list = "0x22 0x23 0x24 0x63";
+String g_command_list = "0x22 0x23 0x24 0x63 0x42";
 
 /*
  * Setup method to handle I2C Wire setup, LED Pins and Serial output
@@ -93,6 +105,10 @@ void setup() {
   Serial.begin(SERIAL_BAUD);           // start serial for output debugging
   Serial.println("Main Engine Control Unit is online, ready for tasking");
   set_led(ON, OFF, OFF);
+
+  g_last_time_ms = millis();
+  g_current_time_ms = millis();
+  
   
 }
 
@@ -101,7 +117,40 @@ void setup() {
  */
 void loop() {
   service_ir_comms();
+  service_timers();
 }
+
+/*
+ * Allows for non-blocking timers
+ * Note, the timer accuraccy is no better than 1ms and only as good as
+ * how often the service_timers function get's called. A better way to
+ * do this is run a decrementer in a timer inturrupt but Arduino framework
+ * makes that difficult.
+ */
+ void service_timers() {
+  unsigned long delta = 0;
+  g_current_time_ms = millis();
+  delta = g_current_time_ms - g_last_time_ms;
+  g_last_time_ms = g_current_time_ms;
+  
+  //decrement individual timers
+  decrement_timer(&g_smoke_timer_ms, &delta);
+  
+  
+  
+ }
+
+/*
+ * Helper function to decrement timers
+ */
+ void decrement_timer(unsigned long volatile *timer, unsigned long *delta) {
+  if(*timer > *delta) {
+    *timer = *timer - *delta;
+  }
+  else {
+    *timer = 0;
+  }
+ }
 
 
 /*
@@ -154,21 +203,32 @@ void service_ir_comms() {
   }
 
   switch(g_smoke_state){
-        case SMOKE_OFF:
-          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
-          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
-          break;
-          
-        case SMOKE_ON:
-          Serial.println("SMOKEN!!!");
-          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FWD7);
-          delay(1000);
-          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
-          pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
-          break;
+    case SMOKE_OFF:
+      //Just chill here and wait
+      break;
+      
+    case SMOKE_START:
+      g_smoke_timer_ms = SMOKE_LENGTH_MS;
+      Serial.println("SMOKEN!!!");
+      pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FWD7);
+      g_smoke_state = SMOKE_RUNNING;
+      break;
+
+    case SMOKE_RUNNING:
+      if(g_smoke_timer_ms == 0) {
+          g_smoke_state = SMOKE_STOP;
+      }
+      break;
+      
+    case SMOKE_STOP:
+      Serial.println("Extinguish!!!");
+      pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
+      pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
+      g_smoke_state = SMOKE_OFF;
+      break;
   }
   //Limit loop speed
-  delay(100);
+  //delay(100);
 }
 
 /*
@@ -205,6 +265,11 @@ void process_i2c_request(void) {
         g_mode_change = true;
         Serial.println(g_engine_speed, HEX);
         //Note, there should be some sanitization here, but maybe not for hacking comp?
+        break;
+
+      case SMOKEN:
+        g_smoke_state = SMOKE_START;
+        g_mode_change = true;
         break;
 
       case MARCO:
