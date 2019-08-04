@@ -29,7 +29,7 @@
 #define LEGO_SMOKE_OUTPUT_BLOCK RED
 #define SERIAL_BAUD 9600
 #define I2C_RX_BUFFER_SIZE 50
-#define I2C_TX_BUFFER_SIZE 50
+#define I2C_TX_BUFFER_SIZE 100
 #define SMOKE_LENGTH_MS   2000
 
 /*
@@ -52,6 +52,11 @@
 #define SMOKE_RUNNING 0x02
 #define SMOKE_STOP    0x03
 
+#define MOTOR_CRUISING_NORMAL 0x00
+
+#define DEBUG_MODE_ON   0xAA
+#define DEBUG_MODE_OFF  0x00
+
 
 /*
  * I2C Comms Definitions
@@ -62,6 +67,9 @@
 #define MARCO             0x24
 #define QUERY_COMMANDS    0x63
 #define SMOKEN            0x42
+#define SET_DEBUG_MODE    0xAA
+#define SET_OVERRIDE      0x77
+#define HBRIDGE_BURN      0x99
 
 //Response
 #define UNKNOWN_COMMAND   0x33
@@ -78,16 +86,36 @@ PowerFunctions pf(LEGO_PF_PIN, LEGO_IR_CHANNEL);   //Setup Lego Power functions 
  */
 short volatile g_engine_speed = 0;
 short volatile g_smoke_state = 0;
-boolean g_mode_change = false;
+short volatile g_motor_state = 0;
+short volatile g_debug_state = 0;
+boolean volatile g_mode_change = false;
+boolean volatile g_debug_enabled = false;
+boolean volatile g_override_enabled = false;
+
 //Timers
 unsigned long volatile g_last_time_ms = 0;
 unsigned long volatile g_current_time_ms =0;
 unsigned long volatile g_smoke_timer_ms = 0;
 
 
+
 CircularBuffer<short,I2C_RX_BUFFER_SIZE> g_i2c_rx_buffer;
 CircularBuffer<short,I2C_TX_BUFFER_SIZE> g_i2c_tx_buffer;
-String g_command_list = "0x22 0x23 0x24 0x63 0x42";
+
+/*
+ * Strings
+ */
+String g_no_dbg_command_list = "0x22 0x23 0x63 0xAA";
+String g_dbg_command_list = "0x22 0x23 0x63 0xAA 0x24 0x77";
+String g_ovrd_command_list = "0x22 0x23 0x63 0xAA 0x77 0x99";
+String g_list_cmd_name = "list commands";
+String g_get_status_cmd_name = "get status";
+String g_set_speed_cmd_name = "set speed";
+String g_debug_cmd_name = "set debug mode";
+String g_marco_cmd_name = "marco";
+String g_override_cmd_name = "enable override";
+String g_hbridge_burn_cmd_name = "enable h-bridge burn";
+String g_unknown_cmd_response = "Unknown Command";
 
 /*
  * Setup method to handle I2C Wire setup, LED Pins and Serial output
@@ -102,12 +130,19 @@ void setup() {
   pinMode(YELLOW_LED, OUTPUT);
   pinMode(RED_LED, OUTPUT);
   
-  Serial.begin(SERIAL_BAUD);           // start serial for output debugging
+  Serial.begin(SERIAL_BAUD);    // start serial for output debugging
   Serial.println("Main Engine Control Unit is online, ready for tasking");
   set_led(ON, OFF, OFF);
 
-  g_last_time_ms = millis();
+  //Init timers
+  g_last_time_ms = millis();    
   g_current_time_ms = millis();
+
+  //run inital state config
+  g_smoke_state = SMOKE_OFF;
+  g_motor_state = MOTOR_CRUISING_NORMAL;
+  g_debug_state = DEBUG_MODE_OFF;
+  g_mode_change = true;         
   
   
 }
@@ -135,9 +170,6 @@ void loop() {
   
   //decrement individual timers
   decrement_timer(&g_smoke_timer_ms, &delta);
-  
-  
-  
  }
 
 /*
@@ -161,45 +193,11 @@ void service_ir_comms() {
     Serial.print("Mode change request to: 0x");
     Serial.println(g_engine_speed, HEX);
     g_mode_change = false;
+    switch(g_motor_state) {
 
-    //Handle the desired mode change
-    switch(g_engine_speed){
-      case 0:
-        Serial.println("Engine off");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_BRK);
-        break;
-      case 1:
-        Serial.println("Slow Speed 1");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD1);
-        break;
-      case 2:
-        Serial.println("Slow Speed 2");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD2);
-        break;
-      case 3:
-        Serial.println("Medium Speed 1");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD3);
-        break;
-      case 4:
-        Serial.println("Medium Speed 2");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD4);
-        break;
-      case 5:
-        Serial.println("Fast Speed 1");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD5);
-        break;
-      case 6:
-        Serial.println("Fast Speed 2");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD6);
-        break;
-      case 7:
-        Serial.println("Fast Speed 2");
-        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD7);
-        break;
-      default:   
-        Serial.println("Unknown Motor Speed");         
-        break;
     }
+    
+    update_ir_motor_speed();
   }
 
   switch(g_smoke_state){
@@ -252,35 +250,232 @@ void process_i2c_request(void) {
     g_i2c_tx_buffer.clear();
     //read command and pull it out of the buffer
     command_temp = g_i2c_rx_buffer.shift();
-    switch(command_temp){
-      case GET_ENGINE_STATUS:
-        Serial.println("Command Received, GET_ENGINE_STATUS");
-        g_i2c_tx_buffer.push(g_engine_speed);
-        //string_to_i2c_buffer("hello");
-        break;
-  
-      case SET_ENGINE_SPEED:
-        Serial.print("Command Received, SET_ENGINE_SPEED : ");
-        g_engine_speed = g_i2c_rx_buffer.shift();
-        g_mode_change = true;
-        Serial.println(g_engine_speed, HEX);
-        //Note, there should be some sanitization here, but maybe not for hacking comp?
-        break;
 
-      case SMOKEN:
-        g_smoke_state = SMOKE_START;
-        g_mode_change = true;
-        break;
+    //Non-debug mode
+    if(g_debug_enabled == false) {
+      Serial.println("DBG OFF");
+      switch(command_temp){
+        case QUERY_COMMANDS:
+          if(g_i2c_rx_buffer.isEmpty() != true) {
+            //payload sent, send name of command
+            switch(g_i2c_rx_buffer.shift()) {
+              case QUERY_COMMANDS:
+                Serial.println("Query name, Query Command");
+                string_to_i2c_buffer(g_list_cmd_name);
+                break;
+                
+              case GET_ENGINE_STATUS:
+                Serial.println("Query name, get engine status");
+                string_to_i2c_buffer(g_get_status_cmd_name);
+                break;
+                
+              case SET_ENGINE_SPEED:
+                Serial.println("Query name, set engine speed");
+                string_to_i2c_buffer(g_set_speed_cmd_name);
+                break;
 
-      case MARCO:
-        Serial.println("Command Received, MARCO");
-        string_to_i2c_buffer("Polo");
-        break;
+              case SET_DEBUG_MODE:
+                Serial.println("Query name, set debug mode");
+                string_to_i2c_buffer(g_debug_cmd_name);
+                break;
+
+              default:
+                Serial.println("Queried Unknown command");
+                string_to_i2c_buffer(g_unknown_cmd_response);
+                
+            }
+          }
+          else {
+            //No payload sent, list commands
+            Serial.println("Command Received, QUERY_COMMANDS");
+            Serial.println("Sending List");
+            string_to_i2c_buffer(g_no_dbg_command_list);
+          }
+
+          break;
+        
+        case GET_ENGINE_STATUS:
+          Serial.println("Command Received, GET_ENGINE_STATUS");
+          g_i2c_tx_buffer.push(g_engine_speed);
+          //string_to_i2c_buffer("hello");
+          break;
+    
+        case SET_ENGINE_SPEED:
+          Serial.print("Command Received, SET_ENGINE_SPEED : ");
+          if(g_i2c_rx_buffer.isEmpty() != true) {
+            g_engine_speed = g_i2c_rx_buffer.shift();
+            if(g_engine_speed < 2) {
+              g_engine_speed = 2;
+            }
+            if(g_engine_speed > 4) {
+              g_engine_speed = 4;
+            }
+            g_mode_change = true;
+            Serial.println(g_engine_speed, HEX);
+          }
+          //Note, there should be some sanitization here, but maybe not for hacking comp?
+          break;
   
-      default:
-        Serial.print("Received unknown command: ");
-        Serial.println(command_temp);
-        g_i2c_tx_buffer.push(UNKNOWN_COMMAND);
+        case SET_DEBUG_MODE:
+          Serial.print("Command Received, SET_DEBUG_MODE : ");
+          if(g_i2c_rx_buffer.isEmpty() != true) {
+            if(g_i2c_rx_buffer.shift() == 0x01) {
+              g_debug_enabled = true;
+              Serial.println("ON");
+            }
+            else {
+              g_debug_enabled = false;
+              Serial.println("OFF");
+            }
+          }
+          
+          break;
+    
+        default:
+          Serial.print("Received unknown command: ");
+          Serial.println(command_temp);
+          g_i2c_tx_buffer.push(UNKNOWN_COMMAND);
+      }
+    }
+    else {
+    
+      //Debug mode enabled
+      if(g_debug_enabled == true) {
+        Serial.println("DBG ON");
+        switch(command_temp){
+          case QUERY_COMMANDS:
+            if(g_i2c_rx_buffer.isEmpty() != true) {
+              //payload sent, send name of command
+              switch(g_i2c_rx_buffer.shift()) {
+                case QUERY_COMMANDS:
+                  Serial.println("Query name, Query Command");
+                  string_to_i2c_buffer(g_list_cmd_name);
+                  break;
+                  
+                case GET_ENGINE_STATUS:
+                  Serial.println("Query name, get engine status");
+                  string_to_i2c_buffer(g_get_status_cmd_name);
+                  break;
+                  
+                case SET_ENGINE_SPEED:
+                  Serial.println("Query name, set engine speed");
+                  string_to_i2c_buffer(g_set_speed_cmd_name);
+                  break;
+  
+                case SET_DEBUG_MODE:
+                  Serial.println("Query name, set debug mode");
+                  string_to_i2c_buffer(g_debug_cmd_name);
+                  break;
+
+                case MARCO:
+                  Serial.println("Query name, marco");
+                  string_to_i2c_buffer(g_marco_cmd_name);
+                  break;
+
+                case SET_OVERRIDE:
+                  Serial.println("Query name, Override");
+                  string_to_i2c_buffer(g_override_cmd_name);
+                  break;
+
+                case HBRIDGE_BURN:
+                  if(g_override_enabled == true) {
+                    Serial.println("Query name, Override");
+                    string_to_i2c_buffer(g_hbridge_burn_cmd_name);
+                  }
+                  else {
+                    Serial.println("Unknown command");
+                    string_to_i2c_buffer(g_unknown_cmd_response);
+                  }
+                  break;
+  
+                default:
+                  Serial.println("Unknown command");
+                  string_to_i2c_buffer(g_unknown_cmd_response);
+                  
+              }
+            }
+            else {
+              //No payload sent, list commands
+              Serial.println("Command Received, QUERY_COMMANDS");
+              Serial.println("Sending List");
+
+              
+              if(g_override_enabled != true) {
+                string_to_i2c_buffer(g_dbg_command_list);
+              }
+              else
+              {
+                string_to_i2c_buffer(g_ovrd_command_list);
+              }
+            }
+  
+            break;
+          
+          case GET_ENGINE_STATUS:
+            Serial.println("Command Received, GET_ENGINE_STATUS");
+            g_i2c_tx_buffer.push(g_engine_speed);
+            //string_to_i2c_buffer("hello");
+            break;
+      
+          case SET_ENGINE_SPEED:
+            Serial.print("Command Received, SET_ENGINE_SPEED : ");
+            if(g_i2c_rx_buffer.isEmpty() != true) {
+              g_engine_speed = g_i2c_rx_buffer.shift();
+              g_mode_change = true;
+              Serial.println(g_engine_speed, HEX);
+            }
+            //Note, there should be some sanitization here, but maybe not for hacking comp?
+            break;
+    
+          case SET_DEBUG_MODE:
+            Serial.print("Command Received, SET_DEBUG_MODE : ");
+            if(g_i2c_rx_buffer.isEmpty() != true) {
+              if(g_i2c_rx_buffer.shift() == 0x01) {
+                g_debug_enabled = true;
+                Serial.println("ON");
+              }
+              else {
+                g_debug_enabled = false;
+                Serial.println("OFF");
+              }
+            }
+            
+            break;
+
+          case MARCO:
+            Serial.print("Command Received, Marco");
+            string_to_i2c_buffer("Polo");
+            break;
+
+          case SET_OVERRIDE:
+            Serial.print("Command Received, Override :");
+            if(g_i2c_rx_buffer.isEmpty() != true) {
+              if(g_i2c_rx_buffer.shift() == 0x01) {
+                g_override_enabled = true;
+                Serial.println("ON");
+              }
+              else {
+                g_override_enabled = false;
+                Serial.println("OFF");
+              }
+            }
+            break;
+
+          case HBRIDGE_BURN:
+            if(g_override_enabled == true) {
+              Serial.print("Command Received, BURN!!!");
+              g_smoke_state = SMOKE_START;
+            }
+            break;
+      
+          default:
+            Serial.print("Received unknown command: ");
+            Serial.println(command_temp);
+            g_i2c_tx_buffer.push(UNKNOWN_COMMAND);
+        }
+
+        
+      }
     }
     g_i2c_rx_buffer.clear(); //flush buffer after processing  
   }
@@ -353,6 +548,49 @@ void set_led(short g, short y, short r) {
   }
 }
 
+/*
+ * Update motor speed by sending IR command
+ */
+ void update_ir_motor_speed(void) {
+  //Handle the desired mode change
+    switch(g_engine_speed){
+      case 0:
+        Serial.println("Engine off");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_BRK);
+        break;
+      case 1:
+        Serial.println("Slow Speed 1");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD1);
+        break;
+      case 2:
+        Serial.println("Slow Speed 2");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD2);
+        break;
+      case 3:
+        Serial.println("Medium Speed 1");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD3);
+        break;
+      case 4:
+        Serial.println("Medium Speed 2");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD4);
+        break;
+      case 5:
+        Serial.println("Fast Speed 1");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD5);
+        break;
+      case 6:
+        Serial.println("Fast Speed 2");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD6);
+        break;
+      case 7:
+        Serial.println("Fast Speed 3");
+        pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD7);
+        break;
+      default:   
+        Serial.println("Unknown Motor Speed");         
+        break;
+    }
+ }
 
 /*
  * DEBUG ONLY
