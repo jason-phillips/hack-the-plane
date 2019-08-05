@@ -25,7 +25,8 @@
  */
 #define ENGINE_I2C_ADDRESS 0x54
 #define LEGO_IR_CHANNEL 0 //0=ch1 1=ch2 etc.
-#define LEGO_MOTOR_OUTPUT_BLOCK BLUE
+#define LEGO_GEAR_OUTPUT_BLOCK BLUE
+#define LEGO_MOTOR_OUTPUT_BLOCK 0
 #define LEGO_SMOKE_OUTPUT_BLOCK RED
 #define SERIAL_BAUD 9600
 #define I2C_RX_BUFFER_SIZE 50
@@ -65,6 +66,7 @@
 #define GET_ENGINE_STATUS 0x22
 #define SET_ENGINE_SPEED  0x23
 #define MARCO             0x24
+#define TOGGLE_GEAR_STATE 0x25
 #define QUERY_COMMANDS    0x63
 #define SMOKEN            0x42
 #define SET_DEBUG_MODE    0xAA
@@ -84,11 +86,14 @@ PowerFunctions pf(LEGO_PF_PIN, LEGO_IR_CHANNEL);   //Setup Lego Power functions 
 /*
  * Globals
  */
+short volatile g_gears_down = false;
 short volatile g_engine_speed = 0;
 short volatile g_smoke_state = 0;
 short volatile g_motor_state = 0;
 short volatile g_debug_state = 0;
+short volatile g_new_state = 0;
 boolean volatile g_mode_change = false;
+boolean volatile g_gear_mode_change = false;
 boolean volatile g_debug_enabled = false;
 boolean volatile g_override_enabled = false;
 
@@ -105,9 +110,9 @@ CircularBuffer<short,I2C_TX_BUFFER_SIZE> g_i2c_tx_buffer;
 /*
  * Strings
  */
-String g_no_dbg_command_list = "0x22 0x23 0x63 0xAA";
-String g_dbg_command_list = "0x22 0x23 0x63 0xAA 0x24 0x77";
-String g_ovrd_command_list = "0x22 0x23 0x63 0xAA 0x77 0x99";
+String g_no_dbg_command_list = "0x22 0x23 0x25 0x63 0xAA";
+String g_dbg_command_list = "0x22 0x23 0x25 0x63 0xAA 0x24 0x77";
+String g_ovrd_command_list = "0x22 0x23 0x25 0x63 0xAA 0x77 0x99";
 String g_list_cmd_name = "list commands";
 String g_get_status_cmd_name = "get status";
 String g_set_speed_cmd_name = "set speed";
@@ -115,6 +120,7 @@ String g_debug_cmd_name = "set debug mode";
 String g_marco_cmd_name = "marco";
 String g_override_cmd_name = "enable override";
 String g_hbridge_burn_cmd_name = "enable h-bridge burn";
+String g_toggle_gear_cmd_name = "toggle gear state";
 String g_unknown_cmd_response = "Unknown Command";
 
 /*
@@ -142,7 +148,7 @@ void setup() {
   g_smoke_state = SMOKE_OFF;
   g_motor_state = MOTOR_CRUISING_NORMAL;
   g_debug_state = DEBUG_MODE_OFF;
-  g_mode_change = true;         
+  g_mode_change = true;
   
   
 }
@@ -153,6 +159,7 @@ void setup() {
 void loop() {
   service_ir_comms();
   service_timers();
+
 }
 
 /*
@@ -183,7 +190,9 @@ void loop() {
     *timer = 0;
   }
  }
-
+  /*
+   * Landing Gear logic
+   */
 
 /*
  * Manages IR comms interface
@@ -198,6 +207,13 @@ void service_ir_comms() {
     }
     
     update_ir_motor_speed();
+  }
+
+  if(g_gear_mode_change) {
+    Serial.print("Toggling gears...");
+    g_gear_mode_change = false;
+    toggle_ir_gear_state();
+    delay(2000); //TODO: determine how long the gears need to deploy / retract
   }
 
   switch(g_smoke_state){
@@ -273,6 +289,11 @@ void process_i2c_request(void) {
                 Serial.println("Query name, set engine speed");
                 string_to_i2c_buffer(g_set_speed_cmd_name);
                 break;
+                
+              case TOGGLE_GEAR_STATE:
+                Serial.println("Query name, toggle gear state");
+                string_to_i2c_buffer(g_toggle_gear_cmd_name);
+                break;
 
               case SET_DEBUG_MODE:
                 Serial.println("Query name, set debug mode");
@@ -315,7 +336,24 @@ void process_i2c_request(void) {
           }
           //Note, there should be some sanitization here, but maybe not for hacking comp?
           break;
-  
+
+        case TOGGLE_GEAR_STATE:
+          Serial.println("Command Received, TOGGLE_GEAR_STATE");
+          if(g_i2c_rx_buffer.isEmpty() != true) {
+            g_new_state = g_i2c_rx_buffer.shift();
+            if(g_new_state != 0) {
+              if(g_engine_speed < 3) {
+                g_gears_down = true;
+              }
+            }
+            else {
+              g_gears_down = false;
+            }
+            g_gear_mode_change = true;
+            Serial.println(((g_gears_down) ? 0 : 1), HEX);
+          }
+          break;
+
         case SET_DEBUG_MODE:
           Serial.print("Command Received, SET_DEBUG_MODE : ");
           if(g_i2c_rx_buffer.isEmpty() != true) {
@@ -361,7 +399,12 @@ void process_i2c_request(void) {
                   Serial.println("Query name, set engine speed");
                   string_to_i2c_buffer(g_set_speed_cmd_name);
                   break;
-  
+
+                case TOGGLE_GEAR_STATE:
+                  Serial.println("Query name, toggle gear state");
+                  string_to_i2c_buffer(g_toggle_gear_cmd_name);
+                  break;  
+
                 case SET_DEBUG_MODE:
                   Serial.println("Query name, set debug mode");
                   string_to_i2c_buffer(g_debug_cmd_name);
@@ -426,7 +469,24 @@ void process_i2c_request(void) {
             }
             //Note, there should be some sanitization here, but maybe not for hacking comp?
             break;
-    
+
+          case TOGGLE_GEAR_STATE:
+            Serial.println("Command Received, TOGGLE_GEAR_STATE");
+            if(g_i2c_rx_buffer.isEmpty() != true) {
+              g_new_state = g_i2c_rx_buffer.shift();
+              if(g_new_state != 0) {
+                g_gears_down = true;
+                set_led(1,1,1);
+              }
+              else {
+                set_led(1,0,0);
+                g_gears_down = false;
+              }
+              g_gear_mode_change = true;
+              Serial.println(((g_gears_down) ? 0 : 1), HEX);
+            }
+            break;
+
           case SET_DEBUG_MODE:
             Serial.print("Command Received, SET_DEBUG_MODE : ");
             if(g_i2c_rx_buffer.isEmpty() != true) {
@@ -592,6 +652,17 @@ void set_led(short g, short y, short r) {
     }
  }
 
+/*
+ * Toggle gear state by sending ir command
+ */
+  void toggle_ir_gear_state(void) { //TODO: These need to be tested, not sure if they're flipped
+    if (g_gears_down) {
+      pf.single_pwm(LEGO_GEAR_OUTPUT_BLOCK, PWM_REV7);
+    }
+    else {
+      pf.single_pwm(LEGO_GEAR_OUTPUT_BLOCK, PWM_FWD7);
+    }
+  }
 /*
  * DEBUG ONLY
  * print rx receive buffer
