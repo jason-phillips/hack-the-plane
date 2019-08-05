@@ -30,7 +30,7 @@
 #define SERIAL_BAUD 9600
 #define I2C_RX_BUFFER_SIZE 50
 #define I2C_TX_BUFFER_SIZE 100
-#define SMOKE_LENGTH_MS   2000
+#define SMOKE_LENGTH_MS   10000
 
 /*
  * Pin Definitions
