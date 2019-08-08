@@ -31,6 +31,7 @@
 #define I2C_RX_BUFFER_SIZE 50
 #define I2C_TX_BUFFER_SIZE 100
 #define SMOKE_LENGTH_MS   10000
+#define STARTUP_LED_SPEED_MS  100
 
 /*
  * Pin Definitions
@@ -121,7 +122,7 @@ const String PROGMEM g_unknown_cmd_response = "Unknown Command";
  * Setup method to handle I2C Wire setup, LED Pins and Serial output
  */
 void setup() {
-    
+  int i;  
   Wire.begin(ENGINE_I2C_ADDRESS);
   Wire.onReceive(receiveEvent); // register event handler for recieve
   Wire.onRequest(requestEvent); // register event handler for request
@@ -132,7 +133,7 @@ void setup() {
   
   Serial.begin(SERIAL_BAUD);    // start serial for output debugging
   Serial.println(F("Main Engine Control Unit is online, ready for tasking"));
-  set_led(ON, OFF, OFF);
+  
 
   //Init timers
   g_last_time_ms = millis();    
@@ -142,8 +143,20 @@ void setup() {
   g_smoke_state = SMOKE_OFF;
   g_motor_state = MOTOR_CRUISING_NORMAL;
   g_debug_state = DEBUG_MODE_OFF;
-  g_mode_change = true;         
-  
+  g_mode_change = true;     
+
+  for (i=0; i<5; i++) {
+    set_led(ON, OFF, OFF);
+    delay(STARTUP_LED_SPEED_MS);
+    set_led(OFF, ON, OFF);
+    delay(STARTUP_LED_SPEED_MS);
+    set_led(OFF, OFF, ON);
+    delay(STARTUP_LED_SPEED_MS);
+    set_led(OFF, ON, OFF);
+    delay(STARTUP_LED_SPEED_MS);
+  }
+
+  set_led(ON, OFF, OFF);
   
 }
 
@@ -210,6 +223,7 @@ void service_ir_comms() {
       Serial.println(F("SMOKEN!!!"));
       pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FWD7);
       g_smoke_state = SMOKE_RUNNING;
+      set_led(DC, DC, ON);
       break;
 
     case SMOKE_RUNNING:
@@ -322,10 +336,12 @@ void process_i2c_request(void) {
             if(g_i2c_rx_buffer.shift() == 0x01) {
               g_debug_enabled = true;
               Serial.println(F("ON"));
+              set_led(OFF, ON, DC);
             }
             else {
               g_debug_enabled = false;
               Serial.println(F("OFF"));
+              set_led(ON, OFF, DC);
             }
           }
           
@@ -432,10 +448,12 @@ void process_i2c_request(void) {
             if(g_i2c_rx_buffer.isEmpty() != true) {
               if(g_i2c_rx_buffer.shift() == 0x01) {
                 g_debug_enabled = true;
+                set_led(OFF, ON, DC);
                 Serial.println(F("ON"));
               }
               else {
                 g_debug_enabled = false;
+                set_led(ON, OFF, DC);
                 Serial.println(F("OFF"));
               }
             }
