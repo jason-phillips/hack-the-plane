@@ -23,7 +23,7 @@
 /*
  * General Config Definitions
  */
-#define ENGINE_I2C_ADDRESS 0x54
+#define ENGINE_I2C_ADDRESS 0x58
 #define LEGO_IR_CHANNEL 0 //0=ch1 1=ch2 etc.
 #define LEGO_MOTOR_OUTPUT_BLOCK BLUE
 #define LEGO_SMOKE_OUTPUT_BLOCK RED
@@ -105,17 +105,17 @@ CircularBuffer<short,I2C_TX_BUFFER_SIZE> g_i2c_tx_buffer;
 /*
  * Strings
  */
-String g_no_dbg_command_list = "0x22 0x23 0x63 0xAA";
-String g_dbg_command_list = "0x22 0x23 0x63 0xAA 0x24 0x77";
-String g_ovrd_command_list = "0x22 0x23 0x63 0xAA 0x77 0x99";
-String g_list_cmd_name = "list commands";
-String g_get_status_cmd_name = "get status";
-String g_set_speed_cmd_name = "set speed";
-String g_debug_cmd_name = "set debug mode";
-String g_marco_cmd_name = "marco";
-String g_override_cmd_name = "enable override";
-String g_hbridge_burn_cmd_name = "enable h-bridge burn";
-String g_unknown_cmd_response = "Unknown Command";
+const String PROGMEM g_no_dbg_command_list = "0x22 0x23 0x63 0xAA";
+const String PROGMEM g_dbg_command_list = "0x22 0x23 0x63 0xAA 0x24 0x77";
+const String PROGMEM g_ovrd_command_list = "0x22 0x23 0x63 0xAA 0x77 0x99";
+const String PROGMEM g_list_cmd_name = "list commands";
+const String PROGMEM g_get_status_cmd_name = "get status";
+const String PROGMEM g_set_speed_cmd_name = "set speed";
+const String PROGMEM g_debug_cmd_name = "set debug mode";
+const String PROGMEM g_marco_cmd_name = "marco";
+const String PROGMEM g_override_cmd_name = "enable override";
+const String PROGMEM g_hbridge_burn_cmd_name = "enable h-bridge burn";
+const String PROGMEM g_unknown_cmd_response = "Unknown Command";
 
 /*
  * Setup method to handle I2C Wire setup, LED Pins and Serial output
@@ -131,7 +131,7 @@ void setup() {
   pinMode(RED_LED, OUTPUT);
   
   Serial.begin(SERIAL_BAUD);    // start serial for output debugging
-  Serial.println("Main Engine Control Unit is online, ready for tasking");
+  Serial.println(F("Main Engine Control Unit is online, ready for tasking"));
   set_led(ON, OFF, OFF);
 
   //Init timers
@@ -190,7 +190,7 @@ void loop() {
  */
 void service_ir_comms() {
   if(g_mode_change == true){   //process new mode of operation
-    Serial.print("Mode change request to: 0x");
+    Serial.print(F("Mode change request to: 0x"));
     Serial.println(g_engine_speed, HEX);
     g_mode_change = false;
     switch(g_motor_state) {
@@ -207,7 +207,7 @@ void service_ir_comms() {
       
     case SMOKE_START:
       g_smoke_timer_ms = SMOKE_LENGTH_MS;
-      Serial.println("SMOKEN!!!");
+      Serial.println(F("SMOKEN!!!"));
       pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FWD7);
       g_smoke_state = SMOKE_RUNNING;
       break;
@@ -219,7 +219,7 @@ void service_ir_comms() {
       break;
       
     case SMOKE_STOP:
-      Serial.println("Extinguish!!!");
+      Serial.println(F("Extinguish!!!"));
       pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_BRK);
       pf.single_pwm(LEGO_SMOKE_OUTPUT_BLOCK, PWM_FLT);
       g_smoke_state = SMOKE_OFF;
@@ -253,55 +253,55 @@ void process_i2c_request(void) {
 
     //Non-debug mode
     if(g_debug_enabled == false) {
-      Serial.println("DBG OFF");
+      Serial.println(F("DBG OFF"));
       switch(command_temp){
         case QUERY_COMMANDS:
           if(g_i2c_rx_buffer.isEmpty() != true) {
             //payload sent, send name of command
             switch(g_i2c_rx_buffer.shift()) {
               case QUERY_COMMANDS:
-                Serial.println("Query name, Query Command");
+                Serial.println(F("Query name, Query Command"));
                 string_to_i2c_buffer(g_list_cmd_name);
                 break;
                 
               case GET_ENGINE_STATUS:
-                Serial.println("Query name, get engine status");
+                Serial.println(F("Query name, get engine status"));
                 string_to_i2c_buffer(g_get_status_cmd_name);
                 break;
                 
               case SET_ENGINE_SPEED:
-                Serial.println("Query name, set engine speed");
+                Serial.println(F("Query name, set engine speed"));
                 string_to_i2c_buffer(g_set_speed_cmd_name);
                 break;
 
               case SET_DEBUG_MODE:
-                Serial.println("Query name, set debug mode");
+                Serial.println(F("Query name, set debug mode"));
                 string_to_i2c_buffer(g_debug_cmd_name);
                 break;
 
               default:
-                Serial.println("Queried Unknown command");
+                Serial.println(F("Queried Unknown command"));
                 string_to_i2c_buffer(g_unknown_cmd_response);
                 
             }
           }
           else {
             //No payload sent, list commands
-            Serial.println("Command Received, QUERY_COMMANDS");
-            Serial.println("Sending List");
+            Serial.println(F("Command Received, QUERY_COMMANDS"));
+            Serial.println(F("Sending List"));
             string_to_i2c_buffer(g_no_dbg_command_list);
           }
 
           break;
         
         case GET_ENGINE_STATUS:
-          Serial.println("Command Received, GET_ENGINE_STATUS");
+          Serial.println(F("Command Received, GET_ENGINE_STATUS"));
           g_i2c_tx_buffer.push(g_engine_speed);
           //string_to_i2c_buffer("hello");
           break;
     
         case SET_ENGINE_SPEED:
-          Serial.print("Command Received, SET_ENGINE_SPEED : ");
+          Serial.print(F("Command Received, SET_ENGINE_SPEED : "));
           if(g_i2c_rx_buffer.isEmpty() != true) {
             g_engine_speed = g_i2c_rx_buffer.shift();
             if(g_engine_speed < 2) {
@@ -317,22 +317,22 @@ void process_i2c_request(void) {
           break;
   
         case SET_DEBUG_MODE:
-          Serial.print("Command Received, SET_DEBUG_MODE : ");
+          Serial.print(F("Command Received, SET_DEBUG_MODE : "));
           if(g_i2c_rx_buffer.isEmpty() != true) {
             if(g_i2c_rx_buffer.shift() == 0x01) {
               g_debug_enabled = true;
-              Serial.println("ON");
+              Serial.println(F("ON"));
             }
             else {
               g_debug_enabled = false;
-              Serial.println("OFF");
+              Serial.println(F("OFF"));
             }
           }
           
           break;
     
         default:
-          Serial.print("Received unknown command: ");
+          Serial.print(F("Received unknown command: "));
           Serial.println(command_temp);
           g_i2c_tx_buffer.push(UNKNOWN_COMMAND);
       }
@@ -341,63 +341,63 @@ void process_i2c_request(void) {
     
       //Debug mode enabled
       if(g_debug_enabled == true) {
-        Serial.println("DBG ON");
+        Serial.println(F("DBG ON"));
         switch(command_temp){
           case QUERY_COMMANDS:
             if(g_i2c_rx_buffer.isEmpty() != true) {
               //payload sent, send name of command
               switch(g_i2c_rx_buffer.shift()) {
                 case QUERY_COMMANDS:
-                  Serial.println("Query name, Query Command");
+                  Serial.println(F("Query name, Query Command"));
                   string_to_i2c_buffer(g_list_cmd_name);
                   break;
                   
                 case GET_ENGINE_STATUS:
-                  Serial.println("Query name, get engine status");
+                  Serial.println(F("Query name, get engine status"));
                   string_to_i2c_buffer(g_get_status_cmd_name);
                   break;
                   
                 case SET_ENGINE_SPEED:
-                  Serial.println("Query name, set engine speed");
+                  Serial.println(F("Query name, set engine speed"));
                   string_to_i2c_buffer(g_set_speed_cmd_name);
                   break;
   
                 case SET_DEBUG_MODE:
-                  Serial.println("Query name, set debug mode");
+                  Serial.println(F("Query name, set debug mode"));
                   string_to_i2c_buffer(g_debug_cmd_name);
                   break;
 
                 case MARCO:
-                  Serial.println("Query name, marco");
+                  Serial.println(F("Query name, marco"));
                   string_to_i2c_buffer(g_marco_cmd_name);
                   break;
 
                 case SET_OVERRIDE:
-                  Serial.println("Query name, Override");
+                  Serial.println(F("Query name, Override"));
                   string_to_i2c_buffer(g_override_cmd_name);
                   break;
 
                 case HBRIDGE_BURN:
                   if(g_override_enabled == true) {
-                    Serial.println("Query name, Override");
+                    Serial.println(F("Query name, Override"));
                     string_to_i2c_buffer(g_hbridge_burn_cmd_name);
                   }
                   else {
-                    Serial.println("Unknown command");
+                    Serial.println(F("Unknown command"));
                     string_to_i2c_buffer(g_unknown_cmd_response);
                   }
                   break;
   
                 default:
-                  Serial.println("Unknown command");
+                  Serial.println(F("Unknown command"));
                   string_to_i2c_buffer(g_unknown_cmd_response);
                   
               }
             }
             else {
               //No payload sent, list commands
-              Serial.println("Command Received, QUERY_COMMANDS");
-              Serial.println("Sending List");
+              Serial.println(F("Command Received, QUERY_COMMANDS"));
+              Serial.println(F("Sending List"));
 
               
               if(g_override_enabled != true) {
@@ -412,13 +412,13 @@ void process_i2c_request(void) {
             break;
           
           case GET_ENGINE_STATUS:
-            Serial.println("Command Received, GET_ENGINE_STATUS");
+            Serial.println(F("Command Received, GET_ENGINE_STATUS"));
             g_i2c_tx_buffer.push(g_engine_speed);
             //string_to_i2c_buffer("hello");
             break;
       
           case SET_ENGINE_SPEED:
-            Serial.print("Command Received, SET_ENGINE_SPEED : ");
+            Serial.print(F("Command Received, SET_ENGINE_SPEED : "));
             if(g_i2c_rx_buffer.isEmpty() != true) {
               g_engine_speed = g_i2c_rx_buffer.shift();
               g_mode_change = true;
@@ -428,48 +428,48 @@ void process_i2c_request(void) {
             break;
     
           case SET_DEBUG_MODE:
-            Serial.print("Command Received, SET_DEBUG_MODE : ");
+            Serial.print(F("Command Received, SET_DEBUG_MODE : "));
             if(g_i2c_rx_buffer.isEmpty() != true) {
               if(g_i2c_rx_buffer.shift() == 0x01) {
                 g_debug_enabled = true;
-                Serial.println("ON");
+                Serial.println(F("ON"));
               }
               else {
                 g_debug_enabled = false;
-                Serial.println("OFF");
+                Serial.println(F("OFF"));
               }
             }
             
             break;
 
           case MARCO:
-            Serial.print("Command Received, Marco");
+            Serial.print(F("Command Received, Marco"));
             string_to_i2c_buffer("Polo");
             break;
 
           case SET_OVERRIDE:
-            Serial.print("Command Received, Override :");
+            Serial.print(F("Command Received, Override :"));
             if(g_i2c_rx_buffer.isEmpty() != true) {
               if(g_i2c_rx_buffer.shift() == 0x01) {
                 g_override_enabled = true;
-                Serial.println("ON");
+                Serial.println(F("ON"));
               }
               else {
                 g_override_enabled = false;
-                Serial.println("OFF");
+                Serial.println(F("OFF"));
               }
             }
             break;
 
           case HBRIDGE_BURN:
             if(g_override_enabled == true) {
-              Serial.print("Command Received, BURN!!!");
+              Serial.print(F("Command Received, BURN!!!"));
               g_smoke_state = SMOKE_START;
             }
             break;
       
           default:
-            Serial.print("Received unknown command: ");
+            Serial.print(F("Received unknown command: "));
             Serial.println(command_temp);
             g_i2c_tx_buffer.push(UNKNOWN_COMMAND);
         }
@@ -555,57 +555,39 @@ void set_led(short g, short y, short r) {
   //Handle the desired mode change
     switch(g_engine_speed){
       case 0:
-        Serial.println("Engine off");
+        Serial.println(F("Engine off"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_BRK);
         break;
       case 1:
-        Serial.println("Slow Speed 1");
+        Serial.println(F("Slow Speed 1"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD1);
         break;
       case 2:
-        Serial.println("Slow Speed 2");
+        Serial.println(F("Slow Speed 2"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD2);
         break;
       case 3:
-        Serial.println("Medium Speed 1");
+        Serial.println(F("Medium Speed 1"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD3);
         break;
       case 4:
-        Serial.println("Medium Speed 2");
+        Serial.println(F("Medium Speed 2"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD4);
         break;
       case 5:
-        Serial.println("Fast Speed 1");
+        Serial.println(F("Fast Speed 1"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD5);
         break;
       case 6:
-        Serial.println("Fast Speed 2");
+        Serial.println(F("Fast Speed 2"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD6);
         break;
       case 7:
-        Serial.println("Fast Speed 3");
+        Serial.println(F("Fast Speed 3"));
         pf.single_pwm(LEGO_MOTOR_OUTPUT_BLOCK, PWM_FWD7);
         break;
       default:   
-        Serial.println("Unknown Motor Speed");         
+        Serial.println(F("Unknown Motor Speed"));         
         break;
     }
  }
-
-/*
- * DEBUG ONLY
- * print rx receive buffer
- */
-void dbg_print_rx_buffer(void) {
-  int i;
-  if(g_i2c_rx_buffer.isEmpty() != true) {
-    for(i=0; i< g_i2c_rx_buffer.size() - 1; i++) {
-      Serial.print(g_i2c_rx_buffer[i], HEX);
-      Serial.print(" ");
-    }
-    Serial.println("Done");
-  }
-  else {
-    Serial.println("Buffer Empty");
-  }
-}
